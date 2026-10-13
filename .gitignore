@@ -1,0 +1,19 @@
+# Datos operativos y evidencias
+Evidencias.xlsx
+TenantLaboratorio.txt
+Backups/
+Ejecuciones/
+Logs/
+PerfilesTemporales/
+
+# Archivos generados
+__pycache__/
+*.py[cod]
+*.png
+*.json
+
+# Entornos y editores
+.venv/
+venv/
+.vscode/
+.idea/
