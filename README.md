@@ -23,6 +23,7 @@ usuarios `Guest` después de validar su identidad y el tenant autorizado.
 - `IniciarPortalTemporal.ps1`: inicia Chrome con depuración remota.
 - `CerrarPortalTemporal.py`: cierra la sesión de Chrome del lote.
 - `TenantLaboratorio.example.txt`: formato del tenant autorizado.
+- `Evidencias.xlsx`: plantilla limpia del libro operativo.
 
 ## Requisitos
 
@@ -50,7 +51,7 @@ py -m pip install -r requirements.txt
 
 1. Copiar `TenantLaboratorio.example.txt` como `TenantLaboratorio.txt`.
 2. Reemplazar el GUID de ejemplo por el Tenant ID autorizado.
-3. Colocar `Evidencias.xlsx` en `C:\AutomatizacionAzure`.
+3. Usar la plantilla `Evidencias.xlsx` incluida en el repositorio.
 4. Confirmar que el libro tenga una hoja llamada `EVIDENCIAS` y estas columnas:
    `#`, `Nombre apellido`, `UPN`, `Antes`, `Despues`, `ACCION TOMADA`.
 5. Ejecutar PowerShell desde `C:\AutomatizacionAzure`.
@@ -76,6 +77,6 @@ el usuario visible en Azure Portal con Microsoft Graph, valida el Object ID,
 el UPN, el tipo de usuario y el tenant configurado. Utilice primero un entorno
 de pruebas y mantenga respaldos del libro de evidencias.
 
-Los archivos operativos, las evidencias, los perfiles del navegador, los logs,
-los respaldos y el Tenant ID real están excluidos del repositorio mediante
-`.gitignore`.
+La plantilla limpia `Evidencias.xlsx` se conserva en el repositorio. Las capturas y los datos agregados durante la operación deben permanecer localmente. Los perfiles del navegador, logs, respaldos y el Tenant ID real están excluidos mediante `.gitignore`.
+
+
