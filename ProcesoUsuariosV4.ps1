@@ -39,6 +39,15 @@ $HojaNombre = "EVIDENCIAS"
 
 $EliminacionIniciada = $false
 
+# Una sola instancia de Excel durante el lote. Abrir y cerrar el libro para
+# cada lectura, imagen y estado hacía que el tiempo creciera a medida que el
+# archivo acumulaba capturas.
+$script:ExcelApp = $null
+$script:ExcelLibro = $null
+$script:ExcelHoja = $null
+$script:MetricasCaptura = New-Object 'System.Collections.Generic.List[object]'
+$script:CapturadorProceso = $null
+
 
 # ==========================================================
 # VALIDAR PARAMETROS
@@ -553,6 +562,90 @@ function Buscar-UsuarioEliminadoPorNombre {
 
 
 # ==========================================================
+# EXCEL - SESION UNICA DEL LOTE
+# ==========================================================
+
+function Iniciar-SesionExcel {
+
+    if ($null -ne $script:ExcelLibro) {
+        return
+    }
+
+    try {
+
+        $script:ExcelApp = New-Object -ComObject Excel.Application
+        $script:ExcelApp.Visible = $false
+        $script:ExcelApp.DisplayAlerts = $false
+
+        $script:ExcelLibro = $script:ExcelApp.Workbooks.Open($ExcelPath)
+
+        if ($script:ExcelLibro.ReadOnly) {
+            throw "El Excel esta abierto o bloqueado."
+        }
+
+        $script:ExcelHoja = $script:ExcelLibro.Worksheets.Item($HojaNombre)
+
+        Write-Host "Sesion unica de Excel iniciada." -ForegroundColor Green
+
+    }
+    catch {
+
+        Cerrar-SesionExcel
+        throw
+
+    }
+}
+
+
+function Guardar-SesionExcel {
+
+    if ($null -eq $script:ExcelLibro) {
+        throw "La sesion de Excel no esta iniciada."
+    }
+
+    $script:ExcelLibro.Save()
+}
+
+
+function Cerrar-SesionExcel {
+
+    if ($null -ne $script:ExcelHoja) {
+        [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject(
+            $script:ExcelHoja
+        )
+        $script:ExcelHoja = $null
+    }
+
+    if ($null -ne $script:ExcelLibro) {
+        try {
+            $script:ExcelLibro.Close($false)
+        }
+        finally {
+            [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject(
+                $script:ExcelLibro
+            )
+            $script:ExcelLibro = $null
+        }
+    }
+
+    if ($null -ne $script:ExcelApp) {
+        try {
+            $script:ExcelApp.Quit()
+        }
+        finally {
+            [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject(
+                $script:ExcelApp
+            )
+            $script:ExcelApp = $null
+        }
+    }
+
+    [GC]::Collect()
+    [GC]::WaitForPendingFinalizers()
+}
+
+
+# ==========================================================
 # EXCEL - LEER
 # ==========================================================
 
@@ -562,64 +655,30 @@ function Leer-FilaExcel {
         [int]$NumeroFila
     )
 
-    $excel = $null
-    $libro = $null
+    Iniciar-SesionExcel
 
-    try {
+    $nombre = [string]$script:ExcelHoja.Cells.Item(
+        $NumeroFila,
+        2
+    ).Value2
 
-        $excel = New-Object -ComObject Excel.Application
+    $upn = [string]$script:ExcelHoja.Cells.Item(
+        $NumeroFila,
+        3
+    ).Value2
 
-        $excel.Visible = $false
+    $accion = [string]$script:ExcelHoja.Cells.Item(
+        $NumeroFila,
+        6
+    ).Value2
 
-        $excel.DisplayAlerts = $false
+    return [PSCustomObject]@{
 
-        $libro = $excel.Workbooks.Open(
-            $ExcelPath,
-            0,
-            $true
-        )
+        Nombre = $nombre.Trim()
 
-        $hoja = $libro.Worksheets.Item($HojaNombre)
+        UPN = $upn.Trim()
 
-        $nombre = [string]$hoja.Cells.Item(
-            $NumeroFila,
-            2
-        ).Value2
-
-        $upn = [string]$hoja.Cells.Item(
-            $NumeroFila,
-            3
-        ).Value2
-
-        $accion = [string]$hoja.Cells.Item(
-            $NumeroFila,
-            6
-        ).Value2
-
-        return [PSCustomObject]@{
-
-            Nombre = $nombre.Trim()
-
-            UPN = $upn.Trim()
-
-            Accion = $accion.Trim()
-
-        }
-
-    }
-    finally {
-
-        if ($null -ne $libro) {
-            $libro.Close($false)
-        }
-
-        if ($null -ne $excel) {
-            $excel.Quit()
-        }
-
-        [GC]::Collect()
-
-        [GC]::WaitForPendingFinalizers()
+        Accion = $accion.Trim()
 
     }
 }
@@ -636,50 +695,14 @@ function Escribir-AccionExcel {
         [string]$Accion
     )
 
-    $excel = $null
-    $libro = $null
+    Iniciar-SesionExcel
 
-    try {
+    $script:ExcelHoja.Cells.Item(
+        $NumeroFila,
+        6
+    ).Value2 = $Accion
 
-        $excel = New-Object -ComObject Excel.Application
-
-        $excel.Visible = $false
-
-        $excel.DisplayAlerts = $false
-
-        $libro = $excel.Workbooks.Open($ExcelPath)
-
-        if ($libro.ReadOnly) {
-            throw "El Excel esta abierto o bloqueado."
-        }
-
-        $hoja = $libro.Worksheets.Item($HojaNombre)
-
-        $hoja.Cells.Item(
-            $NumeroFila,
-            6
-        ).Value2 = $Accion
-
-        $libro.Save()
-
-        Write-Host "F$NumeroFila = $Accion"
-
-    }
-    finally {
-
-        if ($null -ne $libro) {
-            $libro.Close($false)
-        }
-
-        if ($null -ne $excel) {
-            $excel.Quit()
-        }
-
-        [GC]::Collect()
-
-        [GC]::WaitForPendingFinalizers()
-
-    }
+    Write-Host "F$NumeroFila = $Accion"
 }
 
 
@@ -719,30 +742,18 @@ function Insertar-ImagenExcel {
 
     }
 
-    $excel = $null
-    $libro = $null
+    Iniciar-SesionExcel
+
+    $celda = $null
+    $shape = $null
 
     try {
-
-        $excel = New-Object -ComObject Excel.Application
-
-        $excel.Visible = $false
-
-        $excel.DisplayAlerts = $false
-
-        $libro = $excel.Workbooks.Open($ExcelPath)
-
-        if ($libro.ReadOnly) {
-            throw "Excel esta bloqueado o abierto."
-        }
-
-        $hoja = $libro.Worksheets.Item($HojaNombre)
 
         $celdaTexto = "$Columna$NumeroFila"
 
         $direccionEsperada = '$' + $Columna + '$' + $NumeroFila
 
-        $celda = $hoja.Range($celdaTexto)
+        $celda = $script:ExcelHoja.Range($celdaTexto)
 
         [double]$anchoCelda = $celda.Width
 
@@ -781,7 +792,7 @@ function Insertar-ImagenExcel {
         [double]$posY = $celda.Top +
             (($altoCelda - $altoFinal) / 2)
 
-        $shape = $hoja.Shapes.AddPicture(
+        $shape = $script:ExcelHoja.Shapes.AddPicture(
             $ImagenPath,
             0,
             -1,
@@ -815,9 +826,9 @@ function Insertar-ImagenExcel {
 
         # Borrar evidencia anterior de esta misma celda
 
-        for ($i = $hoja.Shapes.Count; $i -ge 1; $i--) {
+        for ($i = $script:ExcelHoja.Shapes.Count; $i -ge 1; $i--) {
 
-            $anterior = $hoja.Shapes.Item($i)
+            $anterior = $script:ExcelHoja.Shapes.Item($i)
 
             if (
                 $anterior.Name -eq $nombreShape -and
@@ -828,6 +839,10 @@ function Insertar-ImagenExcel {
 
             }
 
+            [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject(
+                $anterior
+            )
+
         }
 
         $shape.Name = $nombreShape
@@ -837,45 +852,14 @@ function Insertar-ImagenExcel {
 
         $shape.Visible = -1
 
-        $libro.Save()
-
-        # Verificar persistencia
-
-        $libro.Close($false)
-
-        $libro = $null
-
-        $libro = $excel.Workbooks.Open(
-            $ExcelPath,
-            0,
-            $true
-        )
-
-        $hoja = $libro.Worksheets.Item($HojaNombre)
-
-        $encontrada = $false
-
-        foreach ($objeto in $hoja.Shapes) {
-
-            if ($objeto.Name -eq $nombreShape) {
-
-                if (
-                    $objeto.Width -gt 0 -and
-                    $objeto.Height -gt 0 -and
-                    $objeto.TopLeftCell.Address() -eq $direccionEsperada
-                ) {
-
-                    $encontrada = $true
-
-                    break
-
-                }
-
-            }
-
-        }
-
-        if (-not $encontrada) {
+        # Verificar la imagen en la sesion activa. La persistencia en disco se
+        # confirma al guardar la fila completa.
+        if (
+            $shape.Name -ne $nombreShape -or
+            $shape.Width -le 0 -or
+            $shape.Height -le 0 -or
+            $shape.TopLeftCell.Address() -ne $direccionEsperada
+        ) {
 
             throw "No se pudo verificar la evidencia en $celdaTexto."
 
@@ -886,17 +870,176 @@ function Insertar-ImagenExcel {
     }
     finally {
 
-        if ($null -ne $libro) {
-            $libro.Close($false)
+        if ($null -ne $shape) {
+            [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject(
+                $shape
+            )
         }
 
-        if ($null -ne $excel) {
-            $excel.Quit()
+        if ($null -ne $celda) {
+            [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject(
+                $celda
+            )
         }
 
-        [GC]::Collect()
+    }
+}
 
-        [GC]::WaitForPendingFinalizers()
+
+# ==========================================================
+# CAPTURADOR PYTHON PERSISTENTE
+# ==========================================================
+
+function Leer-LineaCapturador {
+
+    param(
+        [int]$TimeoutMs = 60000
+    )
+
+    if (
+        $null -eq $script:CapturadorProceso -or
+        $script:CapturadorProceso.HasExited
+    ) {
+        throw "El capturador persistente no esta disponible."
+    }
+
+    $tarea = $script:CapturadorProceso.StandardOutput.ReadLineAsync()
+
+    if (-not $tarea.Wait($TimeoutMs)) {
+        throw "El capturador persistente excedio el tiempo de respuesta."
+    }
+
+    $linea = $tarea.Result
+
+    if ($null -eq $linea) {
+        throw "El capturador persistente cerro su salida inesperadamente."
+    }
+
+    return $linea
+}
+
+
+function Iniciar-CapturadorPersistente {
+
+    if (
+        $null -ne $script:CapturadorProceso -and
+        -not $script:CapturadorProceso.HasExited
+    ) {
+        return
+    }
+
+    $python = (Get-Command py -ErrorAction Stop).Source
+
+    $inicioProceso = New-Object Diagnostics.ProcessStartInfo
+    $inicioProceso.FileName = $python
+    $inicioProceso.Arguments = (
+        '-X utf8 -u "' + $CapturaPy.Replace('"','\"') + '" --servidor'
+    )
+    $inicioProceso.UseShellExecute = $false
+    $inicioProceso.RedirectStandardInput = $true
+    $inicioProceso.RedirectStandardOutput = $true
+    $inicioProceso.RedirectStandardError = $false
+    $inicioProceso.CreateNoWindow = $true
+    $utf8SinBom = New-Object Text.UTF8Encoding($false)
+    $inicioProceso.StandardInputEncoding = $utf8SinBom
+    $inicioProceso.StandardOutputEncoding = $utf8SinBom
+
+    $script:CapturadorProceso = New-Object Diagnostics.Process
+    $script:CapturadorProceso.StartInfo = $inicioProceso
+
+    if (-not $script:CapturadorProceso.Start()) {
+        throw "No se pudo iniciar el capturador persistente."
+    }
+
+    while ($true) {
+
+        $linea = Leer-LineaCapturador -TimeoutMs 30000
+
+        if ($linea -eq "__CAPTURA_READY__") {
+            break
+        }
+
+        Write-Host $linea
+    }
+
+    Write-Host "Capturador Playwright persistente iniciado." -ForegroundColor Green
+}
+
+
+function Invocar-CapturadorPersistente {
+
+    param(
+        [string]$Modo,
+        [string]$Busqueda,
+        [string]$Nombre,
+        [string]$Esperado,
+        [string]$Salida,
+        [string]$ResultadoJson
+    )
+
+    Iniciar-CapturadorPersistente
+
+    $solicitud = [ordered]@{
+        modo = $Modo
+        busqueda = $Busqueda
+        nombre = $Nombre
+        esperado = $Esperado
+        salida = $Salida
+        resultado_json = $ResultadoJson
+    } | ConvertTo-Json -Compress
+
+    $script:CapturadorProceso.StandardInput.WriteLine($solicitud)
+    $script:CapturadorProceso.StandardInput.Flush()
+
+    while ($true) {
+
+        $linea = Leer-LineaCapturador -TimeoutMs 120000
+
+        if ($linea.StartsWith("__CAPTURA_RESULT__")) {
+
+            $jsonRespuesta = $linea.Substring(
+                "__CAPTURA_RESULT__".Length
+            )
+
+            $respuesta = $jsonRespuesta | ConvertFrom-Json
+
+            if (-not $respuesta.ok) {
+                throw [string]$respuesta.error
+            }
+
+            return $respuesta
+        }
+
+        Write-Host $linea
+    }
+}
+
+
+function Cerrar-CapturadorPersistente {
+
+    if ($null -eq $script:CapturadorProceso) {
+        return
+    }
+
+    try {
+
+        if (-not $script:CapturadorProceso.HasExited) {
+
+            $cierre = @{ comando = "cerrar" } | ConvertTo-Json -Compress
+            $script:CapturadorProceso.StandardInput.WriteLine($cierre)
+            $script:CapturadorProceso.StandardInput.Flush()
+
+            if (-not $script:CapturadorProceso.WaitForExit(5000)) {
+                $script:CapturadorProceso.Kill()
+                [void]$script:CapturadorProceso.WaitForExit(5000)
+            }
+        }
+
+    }
+    finally {
+
+        $script:CapturadorProceso.Dispose()
+        $script:CapturadorProceso = $null
 
     }
 }
@@ -926,6 +1069,8 @@ function Capturar-Azure {
         [int]$Reintentos = 3
     )
 
+    $cronometroCaptura = [Diagnostics.Stopwatch]::StartNew()
+
     for ($intento = 1; $intento -le $Reintentos; $intento++) {
 
         Write-Host ""
@@ -945,32 +1090,39 @@ function Capturar-Azure {
             Remove-Item -LiteralPath $ResultadoJson -Force
         }
 
-        $argumentosCaptura = @(
-            $CapturaPy,
-            "--modo", $Modo,
-            "--busqueda", $Busqueda,
-            "--nombre", $Nombre,
-            "--esperado", $Esperado,
-            "--salida", $Salida
-        )
+        try {
 
-        if (-not [string]::IsNullOrWhiteSpace($ResultadoJson)) {
-            $argumentosCaptura += @(
-                "--resultado-json",
-                $ResultadoJson
+            [void](
+                Invocar-CapturadorPersistente `
+                    -Modo $Modo `
+                    -Busqueda $Busqueda `
+                    -Nombre $Nombre `
+                    -Esperado $Esperado `
+                    -Salida $Salida `
+                    -ResultadoJson $ResultadoJson
             )
+
+            $codigo = 0
+            $salidaCaptura = @()
+
         }
+        catch {
 
-        $salidaCaptura = @(
-            & py @argumentosCaptura 2>&1
-        )
+            $codigo = 1
+            $salidaCaptura = @(
+                Obtener-DetalleError -ErrorRecord $_
+            )
 
-        $codigo = $LASTEXITCODE
+            # Una falla puede dejar la conexion CDP en un estado incompleto.
+            # El siguiente intento iniciara un trabajador limpio.
+            Cerrar-CapturadorPersistente
 
-        $salidaCaptura |
-            ForEach-Object {
-                Write-Host $_
-            }
+            $salidaCaptura |
+                ForEach-Object {
+                    Write-Host $_ -ForegroundColor Red
+                }
+
+        }
 
         if (
             $codigo -eq 0 -and
@@ -989,7 +1141,7 @@ function Capturar-Azure {
                         throw "No se genero el resultado estructurado del portal."
                     }
 
-                    return (
+                    $resultadoEstructurado = (
                         Get-Content `
                             -LiteralPath $ResultadoJson `
                             -Encoding UTF8 `
@@ -997,7 +1149,41 @@ function Capturar-Azure {
                         ConvertFrom-Json
                     )
 
+                    $cronometroCaptura.Stop()
+                    $script:MetricasCaptura.Add(
+                        [pscustomobject]@{
+                            Fecha = Get-Date
+                            Modo = $Modo
+                            Esperado = $Esperado
+                            Intentos = $intento
+                            Segundos = [math]::Round(
+                                $cronometroCaptura.Elapsed.TotalSeconds,
+                                3
+                            )
+                            Estado = "OK"
+                            Salida = $Salida
+                        }
+                    )
+
+                    return $resultadoEstructurado
+
                 }
+
+                $cronometroCaptura.Stop()
+                $script:MetricasCaptura.Add(
+                    [pscustomobject]@{
+                        Fecha = Get-Date
+                        Modo = $Modo
+                        Esperado = $Esperado
+                        Intentos = $intento
+                        Segundos = [math]::Round(
+                            $cronometroCaptura.Elapsed.TotalSeconds,
+                            3
+                        )
+                        Estado = "OK"
+                        Salida = $Salida
+                    }
+                )
 
                 return
 
@@ -1025,6 +1211,22 @@ function Capturar-Azure {
     if ([string]::IsNullOrWhiteSpace($detalleCaptura)) {
         $detalleCaptura = "El capturador no devolvio detalles."
     }
+
+    $cronometroCaptura.Stop()
+    $script:MetricasCaptura.Add(
+        [pscustomobject]@{
+            Fecha = Get-Date
+            Modo = $Modo
+            Esperado = $Esperado
+            Intentos = $Reintentos
+            Segundos = [math]::Round(
+                $cronometroCaptura.Elapsed.TotalSeconds,
+                3
+            )
+            Estado = "ERROR"
+            Salida = $Salida
+        }
+    )
 
     throw (
         "No se pudo generar la evidencia automatica. " +
@@ -1365,6 +1567,9 @@ function Procesar-Fila {
             -NumeroFila $NumeroFila `
             -Accion "Eliminacion en curso - verificar"
 
+        # Esta marca debe quedar en disco antes de la accion destructiva.
+        Guardar-SesionExcel
+
         $objectIdOriginal = $actual.Id
 
         Write-Host ""
@@ -1454,6 +1659,8 @@ function Procesar-Fila {
             -NumeroFila $NumeroFila `
             -Accion "Eliminado"
 
+        Guardar-SesionExcel
+
         Write-Host "GUEST COMPLETADO." -ForegroundColor Green
 
         return
@@ -1495,6 +1702,8 @@ function Procesar-Fila {
             -NumeroFila $NumeroFila `
             -Accion "Usuario tipo Member"
 
+        Guardar-SesionExcel
+
         Write-Host "MEMBER COMPLETADO." -ForegroundColor Green
 
         return
@@ -1523,6 +1732,8 @@ function Procesar-Fila {
             -NumeroFila $NumeroFila `
             -Accion "Usuario Inactivo"
 
+        Guardar-SesionExcel
+
         Write-Host "USUARIO INACTIVO COMPLETADO." -ForegroundColor Green
 
         return
@@ -1550,6 +1761,8 @@ function Procesar-Fila {
         Escribir-AccionExcel `
             -NumeroFila $NumeroFila `
             -Accion "Usuario No Existe"
+
+        Guardar-SesionExcel
 
         Write-Host "USUARIO NO EXISTE COMPLETADO." -ForegroundColor Green
 
@@ -1677,9 +1890,20 @@ Write-Host ($filas -join ", ")
 $incidenciasFilas = New-Object `
     'System.Collections.Generic.List[object]'
 
+$metricasFilas = New-Object `
+    'System.Collections.Generic.List[object]'
+
 $env:AZURE_AUTOMATION_ROW_WARNINGS = ""
 
+try {
+
+Iniciar-CapturadorPersistente
+Iniciar-SesionExcel
+
 foreach ($numeroFila in $filas) {
+
+    $cronometroFila = [Diagnostics.Stopwatch]::StartNew()
+    $estadoFila = "OK"
 
     try {
 
@@ -1689,6 +1913,8 @@ foreach ($numeroFila in $filas) {
 
     }
     catch {
+
+        $estadoFila = "VERIFICAR"
 
         Write-Host ""
         Write-Host "========================================" -ForegroundColor Red
@@ -1721,6 +1947,8 @@ foreach ($numeroFila in $filas) {
             Escribir-AccionExcel `
                 -NumeroFila $numeroFila `
                 -Accion $accionRevision
+
+            Guardar-SesionExcel
         }
         catch {
             throw (
@@ -1761,8 +1989,49 @@ foreach ($numeroFila in $filas) {
 
         continue
     }
+    finally {
+
+        $cronometroFila.Stop()
+
+        Write-Host (
+            "Tiempo fila ${numeroFila}: " +
+            $cronometroFila.Elapsed.ToString("hh\:mm\:ss\.fff")
+        ) -ForegroundColor Cyan
+
+        $metricasFilas.Add(
+            [pscustomobject]@{
+                Fila = $numeroFila
+                Estado = $estadoFila
+                Segundos = [math]::Round(
+                    $cronometroFila.Elapsed.TotalSeconds,
+                    3
+                )
+            }
+        )
+
+    }
 
 }
+
+}
+finally {
+
+    Cerrar-CapturadorPersistente
+    Cerrar-SesionExcel
+
+}
+
+$metricasFilas |
+    Export-Csv `
+        -LiteralPath (Join-Path $runPath "TiemposPorFila.csv") `
+        -NoTypeInformation `
+        -Encoding UTF8
+
+$script:MetricasCaptura |
+    Export-Csv `
+        -LiteralPath (Join-Path $runPath "TiemposCapturas.csv") `
+        -NoTypeInformation `
+        -Encoding UTF8
 
 if ($incidenciasFilas.Count -gt 0) {
 

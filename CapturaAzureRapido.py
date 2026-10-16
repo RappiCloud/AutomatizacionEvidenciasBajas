@@ -24,33 +24,34 @@ parser = argparse.ArgumentParser(
 
 parser.add_argument(
     "--modo",
-    required=True,
     choices=["all", "deleted"]
 )
 
 parser.add_argument(
-    "--busqueda",
-    required=True
+    "--busqueda"
 )
 
 parser.add_argument(
-    "--nombre",
-    required=True
+    "--nombre"
 )
 
 parser.add_argument(
     "--esperado",
-    required=True,
     choices=["encontrado", "no_encontrado", "auto"]
 )
 
 parser.add_argument(
-    "--salida",
-    required=True
+    "--salida"
 )
 
 parser.add_argument(
     "--resultado-json"
+)
+
+parser.add_argument(
+    "--servidor",
+    action="store_true",
+    help="Mantiene Playwright conectado y recibe solicitudes JSON por stdin."
 )
 
 args = parser.parse_args()
@@ -88,24 +89,69 @@ ALL_URL = (
     "UserManagementMenuBlade/~/AllUsers"
 )
 
-SALIDA = Path(args.salida)
+SALIDA = None
+RESULTADO_JSON = None
 
-SALIDA.parent.mkdir(
-    parents=True,
-    exist_ok=True
-)
 
-RESULTADO_JSON = (
-    Path(args.resultado_json)
-    if args.resultado_json
-    else None
-)
+def configurar_solicitud(datos):
 
-if RESULTADO_JSON is not None:
-    RESULTADO_JSON.parent.mkdir(
-        parents=True,
-        exist_ok=True
+    global args, SALIDA, RESULTADO_JSON
+
+    requeridos = (
+        "modo",
+        "busqueda",
+        "nombre",
+        "esperado",
+        "salida",
     )
+
+    faltantes = [
+        campo
+        for campo in requeridos
+        if not datos.get(campo)
+    ]
+
+    if faltantes:
+        raise RuntimeError(
+            "Faltan argumentos requeridos: "
+            + ", ".join(faltantes)
+        )
+
+    if datos["modo"] not in ("all", "deleted"):
+        raise RuntimeError("Modo no valido.")
+
+    if datos["esperado"] not in (
+        "encontrado",
+        "no_encontrado",
+        "auto",
+    ):
+        raise RuntimeError("Valor esperado no valido.")
+
+    args = argparse.Namespace(
+        modo=datos["modo"],
+        busqueda=str(datos["busqueda"]),
+        nombre=str(datos["nombre"]),
+        esperado=datos["esperado"],
+        salida=str(datos["salida"]),
+        resultado_json=(
+            str(datos["resultado_json"])
+            if datos.get("resultado_json")
+            else None
+        ),
+        servidor=bool(datos.get("servidor", False)),
+    )
+
+    SALIDA = Path(args.salida)
+    SALIDA.parent.mkdir(parents=True, exist_ok=True)
+
+    RESULTADO_JSON = (
+        Path(args.resultado_json)
+        if args.resultado_json
+        else None
+    )
+
+    if RESULTADO_JSON is not None:
+        RESULTADO_JSON.parent.mkdir(parents=True, exist_ok=True)
 
 NOMBRE_PESTANA = "AUTO_AZURE"
 
@@ -1145,155 +1191,159 @@ def capturar(page):
 # MAIN
 # ============================================================
 
-try:
+def conectar_browser(playwright):
+
+    browser = playwright.chromium.connect_over_cdp(CDP)
+
+    if not browser.contexts:
+        raise RuntimeError("No existe contexto Chrome disponible.")
+
+    return browser
+
+
+def procesar_captura(browser):
 
     inicio = time.monotonic()
 
-    with sync_playwright() as p:
+    print("")
+    print("======================================")
+    print("CAPTURA AZURE RAPIDA")
+    print("UNA SOLA PESTANA")
+    print("RESULTADO ESTABLE")
+    print("======================================")
 
-        print("")
-        print("======================================")
-        print("CAPTURA AZURE RAPIDA")
-        print("UNA SOLA PESTANA")
-        print("RESULTADO ESTABLE")
-        print("======================================")
+    context = browser.contexts[0]
+    page = obtener_pagina_unica(context)
+    validar_sesion(page)
 
-        # ----------------------------------------------------
-        # CONECTAR AL CHROME DEL LOTE
-        # ----------------------------------------------------
+    if args.modo == "all":
+        frame, search = ir_all_users(page)
+    else:
+        frame, search = ir_deleted_users(page)
 
-        browser = p.chromium.connect_over_cdp(
-            CDP
-        )
+    estado_resultado = ejecutar_busqueda(
+        page,
+        frame,
+        search
+    )
 
-        if not browser.contexts:
+    resultado_portal = None
 
+    if RESULTADO_JSON is not None:
+
+        if args.modo != "all" or args.esperado != "auto":
             raise RuntimeError(
-                "No existe contexto Chrome disponible."
+                "--resultado-json requiere --modo all --esperado auto."
             )
 
-        context = browser.contexts[0]
-
-        # ----------------------------------------------------
-        # UNA SOLA PESTANA
-        # ----------------------------------------------------
-
-        page = obtener_pagina_unica(
-            context
-        )
-
-        validar_sesion(
-            page
-        )
-
-        # ----------------------------------------------------
-        # VISTA
-        # ----------------------------------------------------
-
-        if args.modo == "all":
-
-            frame, search = ir_all_users(
-                page
+        if estado_resultado == "encontrado":
+            resultado_portal = extraer_usuario_visible(
+                frame,
+                args.nombre,
+                args.busqueda
             )
-
         else:
+            resultado_portal = {
+                "encontrado": False,
+                "displayName": None,
+                "userPrincipalName": None,
+                "userType": None,
+                "objectId": None,
+                "displayNameCoincide": False,
+                "upnCoincide": False,
+            }
 
-            frame, search = ir_deleted_users(
-                page
-            )
+    capturar(page)
 
-        # ----------------------------------------------------
-        # BUSQUEDA
-        # ----------------------------------------------------
-
-        estado_resultado = ejecutar_busqueda(
-            page,
-            frame,
-            search
+    if RESULTADO_JSON is not None:
+        RESULTADO_JSON.write_text(
+            json.dumps(
+                resultado_portal,
+                ensure_ascii=False,
+                indent=2
+            ),
+            encoding="utf-8"
         )
 
-        resultado_portal = None
+    duracion = time.monotonic() - inicio
 
-        if RESULTADO_JSON is not None:
-
-            if args.modo != "all" or args.esperado != "auto":
-
-                raise RuntimeError(
-                    "--resultado-json requiere --modo all --esperado auto."
-                )
-
-            if estado_resultado == "encontrado":
-
-                resultado_portal = extraer_usuario_visible(
-                    frame,
-                    args.nombre,
-                    args.busqueda
-                )
-
-            else:
-
-                resultado_portal = {
-                    "encontrado": False,
-                    "displayName": None,
-                    "userPrincipalName": None,
-                    "userType": None,
-                    "objectId": None,
-                    "displayNameCoincide": False,
-                    "upnCoincide": False,
-                }
-
-        # ----------------------------------------------------
-        # CAPTURA
-        # ----------------------------------------------------
-
-        capturar(
-            page
-        )
-
-        if RESULTADO_JSON is not None:
-
-            RESULTADO_JSON.write_text(
-                json.dumps(
-                    resultado_portal,
-                    ensure_ascii=False,
-                    indent=2
-                ),
-                encoding="utf-8"
-            )
-
-        duracion = (
-            time.monotonic()
-            - inicio
-        )
-
-        print("")
-        print("CAPTURA GENERADA:")
-        print(SALIDA)
-
-        print(
-            f"Tiempo captura: {duracion:.2f} segundos"
-        )
-
-        # ----------------------------------------------------
-    # NO CERRAR CHROME
-        #
-        # Se reutiliza durante todo el lote.
-        # EjecutarAutomatizacion.ps1 lo cerrara al final.
-        # ----------------------------------------------------
-
-        sys.exit(0)
+    print("")
+    print("CAPTURA GENERADA:")
+    print(SALIDA)
+    print(f"Tiempo captura: {duracion:.2f} segundos")
 
 
-except Exception as exc:
+def imprimir_error(exc):
 
     print("")
     print("======================================")
     print("ERROR CAPTURA AZURE")
     print("======================================")
+    print(seguro(str(exc)))
 
-    print(
-        seguro(str(exc))
-    )
 
-    sys.exit(1)
+def ejecutar_individual():
+
+    configurar_solicitud(vars(args))
+
+    with sync_playwright() as playwright:
+        browser = conectar_browser(playwright)
+        procesar_captura(browser)
+
+
+def ejecutar_servidor():
+
+    with sync_playwright() as playwright:
+
+        browser = conectar_browser(playwright)
+        print("__CAPTURA_READY__", flush=True)
+
+        for linea in sys.stdin:
+
+            linea = linea.lstrip("\ufeff").strip()
+
+            if not linea:
+                continue
+
+            solicitud = json.loads(linea)
+
+            if solicitud.get("comando") == "cerrar":
+                print(
+                    "__CAPTURA_RESULT__" + json.dumps({"ok": True}),
+                    flush=True
+                )
+                return
+
+            try:
+                configurar_solicitud(solicitud)
+                procesar_captura(browser)
+                respuesta = {"ok": True}
+            except Exception as exc:
+                imprimir_error(exc)
+                respuesta = {
+                    "ok": False,
+                    "error": seguro(str(exc)),
+                }
+
+            print(
+                "__CAPTURA_RESULT__" + json.dumps(
+                    respuesta,
+                    ensure_ascii=True
+                ),
+                flush=True
+            )
+
+
+if __name__ == "__main__":
+
+    try:
+
+        if args.servidor:
+            ejecutar_servidor()
+        else:
+            ejecutar_individual()
+
+    except Exception as exc:
+        imprimir_error(exc)
+        sys.exit(1)
 

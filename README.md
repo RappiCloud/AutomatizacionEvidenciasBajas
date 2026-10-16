@@ -15,6 +15,15 @@ usuarios `Guest` después de validar su identidad y el tenant autorizado.
 - Marca errores individuales como `Verificar` y continúa con las demás filas.
 - Guarda ejecuciones, incidencias, copias de seguridad y tiempos localmente.
 
+## Rendimiento
+
+- Mantiene una sola instancia de Excel abierta durante el lote.
+- Guarda el libro una vez al completar cada fila. Para usuarios `Guest`, hace
+  un guardado adicional antes de eliminar para conservar la marca de control.
+- Mantiene una sola conexión de Playwright con Chrome durante la ejecución.
+- Genera `TiemposPorFila.csv` y `TiemposCapturas.csv` dentro de la carpeta de
+  cada ejecución para identificar demoras y reintentos.
+
 ## Archivos del flujo
 
 - `EjecutarAutomatizacion.ps1`: inicia y finaliza el proceso completo.
