@@ -940,10 +940,6 @@ function Iniciar-CapturadorPersistente {
     $inicioProceso.RedirectStandardOutput = $true
     $inicioProceso.RedirectStandardError = $false
     $inicioProceso.CreateNoWindow = $true
-    $utf8SinBom = New-Object Text.UTF8Encoding($false)
-    $inicioProceso.StandardInputEncoding = $utf8SinBom
-    $inicioProceso.StandardOutputEncoding = $utf8SinBom
-
     $script:CapturadorProceso = New-Object Diagnostics.Process
     $script:CapturadorProceso.StartInfo = $inicioProceso
 
@@ -988,7 +984,15 @@ function Invocar-CapturadorPersistente {
         resultado_json = $ResultadoJson
     } | ConvertTo-Json -Compress
 
-    $script:CapturadorProceso.StandardInput.WriteLine($solicitud)
+    # Windows PowerShell 5.1 no permite configurar StandardInputEncoding
+    # en ProcessStartInfo. Se envia el JSON como Base64 ASCII para conservar
+    # correctamente nombres y rutas con tildes u otros caracteres Unicode.
+    $solicitudBytes = [Text.Encoding]::UTF8.GetBytes($solicitud)
+    $solicitudBase64 = [Convert]::ToBase64String($solicitudBytes)
+
+    $script:CapturadorProceso.StandardInput.WriteLine(
+        "BASE64:$solicitudBase64"
+    )
     $script:CapturadorProceso.StandardInput.Flush()
 
     while ($true) {
@@ -1026,7 +1030,12 @@ function Cerrar-CapturadorPersistente {
         if (-not $script:CapturadorProceso.HasExited) {
 
             $cierre = @{ comando = "cerrar" } | ConvertTo-Json -Compress
-            $script:CapturadorProceso.StandardInput.WriteLine($cierre)
+            $cierreBytes = [Text.Encoding]::UTF8.GetBytes($cierre)
+            $cierreBase64 = [Convert]::ToBase64String($cierreBytes)
+
+            $script:CapturadorProceso.StandardInput.WriteLine(
+                "BASE64:$cierreBase64"
+            )
             $script:CapturadorProceso.StandardInput.Flush()
 
             if (-not $script:CapturadorProceso.WaitForExit(5000)) {

@@ -1,4 +1,5 @@
 import argparse
+import base64
 import ctypes
 import json
 import re
@@ -1304,6 +1305,11 @@ def ejecutar_servidor():
 
             if not linea:
                 continue
+
+            if linea.startswith("BASE64:"):
+                linea = base64.b64decode(
+                    linea[len("BASE64:"):]
+                ).decode("utf-8")
 
             solicitud = json.loads(linea)
 
