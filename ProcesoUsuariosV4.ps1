@@ -826,13 +826,25 @@ function Insertar-ImagenExcel {
 
         # Borrar evidencia anterior de esta misma celda
 
+        # Shapes.Item puede devolver el mismo RCW que ya esta guardado en
+        # $shape para la imagen recien creada. FinalReleaseComObject sobre ese
+        # alias invalida tambien $shape y rompe la sesion antes de continuar
+        # con Deleted users. Conservamos el RCW de la imagen actual y solo
+        # liberamos las demas figuras recorridas.
+
+        $shapeIdActual = $shape.ID
+
         for ($i = $script:ExcelHoja.Shapes.Count; $i -ge 1; $i--) {
 
             $anterior = $script:ExcelHoja.Shapes.Item($i)
 
+            if ($anterior.ID -eq $shapeIdActual) {
+                $anterior = $null
+                continue
+            }
+
             if (
-                $anterior.Name -eq $nombreShape -and
-                $anterior.ID -ne $shape.ID
+                $anterior.Name -eq $nombreShape
             ) {
 
                 $anterior.Delete()
