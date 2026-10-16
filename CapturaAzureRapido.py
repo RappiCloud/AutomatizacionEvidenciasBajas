@@ -179,6 +179,9 @@ CONFIRMACIONES_ESTABLES = 2
 # filas, iconos, columnas, etc.
 ESPERA_RENDER_FINAL_MS = 500
 
+# Margen adicional exclusivo antes de capturar Deleted users
+ESPERA_ADICIONAL_DELETED_MS = 2000
+
 # Tiempo para que Windows ponga Chrome realmente al frente
 ESPERA_FOCO_MS = 100
 
@@ -1227,6 +1230,11 @@ def procesar_captura(browser):
         frame,
         search
     )
+
+    if args.modo == "deleted":
+        page.wait_for_timeout(
+            ESPERA_ADICIONAL_DELETED_MS
+        )
 
     resultado_portal = None
 
