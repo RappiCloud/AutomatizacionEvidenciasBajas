@@ -298,14 +298,15 @@ function Es-Error404 {
 
 function Conectar-Graph {
 
-    # Hay instalaciones separadas para Windows PowerShell 5.1
-    # y PowerShell 7. Fijar una sola version evita que PowerShell
-    # combine Users 2.38.1 con Authentication 2.40.0.
+    # Windows PowerShell 5.1 usa Authentication 2.33.0 porque
+    # versiones posteriores presentan un fallo conocido del listener.
+    # La version se selecciona explicitamente para impedir que otra
+    # instalacion de Graph se cargue automaticamente.
 
     $versionGraph = if (
         $PSVersionTable.PSEdition -eq "Desktop"
     ) {
-        "2.38.1"
+        "2.33.0"
     }
     else {
         "2.39.0"
@@ -2176,5 +2177,3 @@ Write-Host $runPath
 Write-Host ""
 Write-Host "Excel:"
 Write-Host $ExcelPath
-
-
