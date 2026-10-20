@@ -468,14 +468,32 @@ Proceso detenido.
 
     }
 
-    # Get-MgContext solamente confirma que existe un contexto. Esta llamada
-    # obtiene un token real antes de abrir Excel o empezar las filas, evitando
-    # solicitudes de autenticacion repetidas durante el procesamiento.
+    # Get-MgContext solamente confirma que existe un contexto. Se validan aqui
+    # las mismas operaciones de lectura que se utilizaran durante las filas.
+    # Si Microsoft necesita renovar o ampliar el token, debe hacerlo antes de
+    # abrir Excel y nunca en medio del procesamiento de un usuario.
     try {
 
         $perfilGraph = Invoke-MgGraphRequest `
             -Method GET `
             -Uri "https://graph.microsoft.com/v1.0/me?`$select=id,userPrincipalName" `
+            -ErrorAction Stop
+
+        $null = Invoke-MgGraphRequest `
+            -Method GET `
+            -Uri (
+                "https://graph.microsoft.com/v1.0/users" +
+                "?`$select=id&`$top=1"
+            ) `
+            -ErrorAction Stop
+
+        $null = Invoke-MgGraphRequest `
+            -Method GET `
+            -Uri (
+                "https://graph.microsoft.com/v1.0/directory/" +
+                "deletedItems/microsoft.graph.user" +
+                "?`$select=id&`$top=1"
+            ) `
             -ErrorAction Stop
 
     }
@@ -2154,6 +2172,17 @@ if ($incidenciasFilas.Count -gt 0) {
         ($filasRevision -join ", ") +
         ". Detalle: $archivoIncidencias"
     )
+
+    if (
+        -not [string]::IsNullOrWhiteSpace(
+            [string]$env:AZURE_AUTOMATION_RESULT
+        )
+    ) {
+        Set-Content `
+            -LiteralPath $env:AZURE_AUTOMATION_RESULT `
+            -Value $env:AZURE_AUTOMATION_ROW_WARNINGS `
+            -Encoding UTF8
+    }
 
     Write-Host ""
     Write-Host "========================================" -ForegroundColor Yellow
