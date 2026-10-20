@@ -4,7 +4,6 @@ Backups/
 Ejecuciones/
 Logs/
 PerfilesTemporales/
-TokensGraph/
 
 # Archivos generados
 __pycache__/

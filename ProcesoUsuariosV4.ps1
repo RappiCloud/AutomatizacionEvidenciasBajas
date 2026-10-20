@@ -19,8 +19,6 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-Add-Type -AssemblyName System.Security -ErrorAction Stop
-
 # ==========================================================
 # CONFIGURACION
 # ==========================================================
@@ -37,10 +35,6 @@ $EjecucionesPath = Join-Path $Base "Ejecuciones"
 
 $BackupsPath = Join-Path $Base "Backups"
 
-$TokensGraphPath = Join-Path $Base "TokensGraph"
-
-$TokenGraphFile = Join-Path $TokensGraphPath "refresh-token.bin"
-
 $HojaNombre = "EVIDENCIAS"
 
 $EliminacionIniciada = $false
@@ -53,10 +47,6 @@ $script:ExcelLibro = $null
 $script:ExcelHoja = $null
 $script:MetricasCaptura = New-Object 'System.Collections.Generic.List[object]'
 $script:CapturadorProceso = $null
-$script:GraphAccessToken = $null
-$script:GraphAccessTokenExpira = [datetime]::MinValue
-$script:GraphTenantId = $null
-$script:GraphContext = $null
 
 
 # ==========================================================
@@ -307,6 +297,75 @@ function Es-Error404 {
 # ==========================================================
 
 function Conectar-Graph {
+
+    # Hay instalaciones separadas para Windows PowerShell 5.1
+    # y PowerShell 7. Fijar una sola version evita que PowerShell
+    # combine Users 2.38.1 con Authentication 2.40.0.
+
+    $versionGraph = if (
+        $PSVersionTable.PSEdition -eq "Desktop"
+    ) {
+        "2.38.1"
+    }
+    else {
+        "2.39.0"
+    }
+
+    $modulosGraph = @(
+        "Microsoft.Graph.Authentication",
+        "Microsoft.Graph.Users",
+        "Microsoft.Graph.Identity.DirectoryManagement"
+    )
+
+    foreach ($moduloGraph in $modulosGraph) {
+
+        $disponible = Get-Module `
+            -ListAvailable `
+            -Name $moduloGraph |
+            Where-Object {
+                $_.Version -eq [version]$versionGraph
+            } |
+            Select-Object -First 1
+
+        if ($null -eq $disponible) {
+
+            throw (
+                "No esta instalada la version $versionGraph " +
+                "del modulo $moduloGraph."
+            )
+
+        }
+
+        Import-Module `
+            -Name $disponible.Path `
+            -Force `
+            -ErrorAction Stop
+
+    }
+
+    $versionesCargadas = @(
+        Get-Module $modulosGraph |
+        Select-Object `
+            Name,
+            Version
+    )
+
+    foreach ($moduloCargado in $versionesCargadas) {
+
+        if ($moduloCargado.Version -ne [version]$versionGraph) {
+
+            throw (
+                "Microsoft Graph tiene versiones mezcladas en memoria. " +
+                "Cierra PowerShell y vuelve a ejecutar. " +
+                "Esperada: $versionGraph. " +
+                "Cargada: $($moduloCargado.Name) " +
+                "$($moduloCargado.Version)."
+            )
+
+        }
+
+    }
+
     if (-not (Test-Path -LiteralPath $TenantPath)) {
         throw "No existe TenantLaboratorio.txt."
     }
@@ -319,359 +378,94 @@ function Conectar-Graph {
         throw "TenantLaboratorio.txt no contiene un Tenant ID valido."
     }
 
-    $script:GraphTenantId = $tenantPermitido
+    $scopesNecesarios = @(
+        "User.Read.All",
+        "User.DeleteRestore.All"
+    )
 
-    Obtener-TokenGraph -PermitirCodigoDispositivo
+    $contexto = Get-MgContext
 
-    $perfilGraph = Invoke-GraphRequest `
-        -Method GET `
-        -Uri "https://graph.microsoft.com/v1.0/me?`$select=id,userPrincipalName"
+    $reconectar = $false
 
-    if (
-        $null -eq $perfilGraph -or
-        [string]::IsNullOrWhiteSpace([string]$perfilGraph.id)
-    ) {
-        throw "Microsoft Graph no devolvio la identidad autenticada."
+    if ($null -eq $contexto) {
+
+        $reconectar = $true
+
+    }
+    else {
+
+        if ($contexto.TenantId -ine $tenantPermitido) {
+            $reconectar = $true
+        }
+
+        foreach ($scope in $scopesNecesarios) {
+
+            if ($contexto.Scopes -notcontains $scope) {
+                $reconectar = $true
+            }
+
+        }
+
     }
 
-    $script:GraphContext = [pscustomobject]@{
-        TenantId = $tenantPermitido
-        Account = [string]$perfilGraph.userPrincipalName
-        AuthType = "Delegated"
+    if ($reconectar) {
+
+        if ($null -ne $contexto) {
+
+            Disconnect-MgGraph `
+                -ErrorAction SilentlyContinue |
+                Out-Null
+
+        }
+
+        Connect-MgGraph `
+            -TenantId $tenantPermitido `
+            -Scopes $scopesNecesarios `
+            -NoWelcome `
+            -ErrorAction Stop
+
+    }
+
+    $contexto = Get-MgContext
+
+    if ($null -eq $contexto) {
+        throw "No hay conexion con Microsoft Graph."
+    }
+
+    if ($contexto.AuthType -ne "Delegated") {
+        throw "La sesion Graph no es Delegated."
+    }
+
+    foreach ($scope in $scopesNecesarios) {
+
+        if ($contexto.Scopes -notcontains $scope) {
+            throw "Falta el permiso $scope."
+        }
+
+    }
+
+    if ($contexto.TenantId -ne $tenantPermitido) {
+
+        throw @"
+TENANT INCORRECTO.
+
+Actual:
+$($contexto.TenantId)
+
+Permitido:
+$tenantPermitido
+
+Proceso detenido.
+"@
+
     }
 
     Write-Host ""
     Write-Host "GRAPH CONECTADO" -ForegroundColor Green
-    Write-Host "Cuenta: $($script:GraphContext.Account)"
-    Write-Host "Tenant: $($script:GraphContext.TenantId)"
+    Write-Host "Cuenta: $($contexto.Account)"
+    Write-Host "Tenant: $($contexto.TenantId)"
 
-    return $script:GraphContext
-}
-
-
-function Obtener-CuerpoErrorHttp {
-
-    param(
-        [System.Management.Automation.ErrorRecord]$ErrorRecord
-    )
-
-    if (
-        $null -ne $ErrorRecord.ErrorDetails -and
-        -not [string]::IsNullOrWhiteSpace(
-            [string]$ErrorRecord.ErrorDetails.Message
-        )
-    ) {
-        return [string]$ErrorRecord.ErrorDetails.Message
-    }
-
-    try {
-        $respuesta = $ErrorRecord.Exception.Response
-        if ($null -ne $respuesta) {
-            $lector = New-Object IO.StreamReader(
-                $respuesta.GetResponseStream()
-            )
-            try {
-                return $lector.ReadToEnd()
-            }
-            finally {
-                $lector.Dispose()
-            }
-        }
-    }
-    catch {
-    }
-
-    return [string]$ErrorRecord.Exception.Message
-}
-
-
-function Guardar-RefreshTokenGraph {
-
-    param(
-        [string]$RefreshToken
-    )
-
-    if ([string]::IsNullOrWhiteSpace($RefreshToken)) {
-        return
-    }
-
-    New-Item `
-        -ItemType Directory `
-        -Path $TokensGraphPath `
-        -Force |
-        Out-Null
-
-    $datos = [Text.Encoding]::UTF8.GetBytes($RefreshToken)
-    $entropia = [Text.Encoding]::UTF8.GetBytes(
-        "AutomatizacionAzure-Graph-v1"
-    )
-
-    $protegido = [Security.Cryptography.ProtectedData]::Protect(
-        $datos,
-        $entropia,
-        [Security.Cryptography.DataProtectionScope]::CurrentUser
-    )
-
-    [IO.File]::WriteAllBytes($TokenGraphFile, $protegido)
-}
-
-
-function Leer-RefreshTokenGraph {
-
-    if (-not (Test-Path -LiteralPath $TokenGraphFile)) {
-        return $null
-    }
-
-    try {
-        $protegido = [IO.File]::ReadAllBytes($TokenGraphFile)
-        $entropia = [Text.Encoding]::UTF8.GetBytes(
-            "AutomatizacionAzure-Graph-v1"
-        )
-
-        $datos = [Security.Cryptography.ProtectedData]::Unprotect(
-            $protegido,
-            $entropia,
-            [Security.Cryptography.DataProtectionScope]::CurrentUser
-        )
-
-        return [Text.Encoding]::UTF8.GetString($datos)
-    }
-    catch {
-        return $null
-    }
-}
-
-
-function Establecer-TokenGraph {
-
-    param(
-        [object]$RespuestaToken
-    )
-
-    if (
-        $null -eq $RespuestaToken -or
-        [string]::IsNullOrWhiteSpace(
-            [string]$RespuestaToken.access_token
-        )
-    ) {
-        throw "Microsoft no devolvio un access token de Graph."
-    }
-
-    $script:GraphAccessToken = [string]$RespuestaToken.access_token
-
-    $segundos = 3600
-    if ($null -ne $RespuestaToken.expires_in) {
-        $segundos = [int]$RespuestaToken.expires_in
-    }
-
-    $script:GraphAccessTokenExpira = (Get-Date).AddSeconds($segundos)
-
-    if (
-        -not [string]::IsNullOrWhiteSpace(
-            [string]$RespuestaToken.refresh_token
-        )
-    ) {
-        Guardar-RefreshTokenGraph `
-            -RefreshToken ([string]$RespuestaToken.refresh_token)
-    }
-}
-
-
-function Obtener-TokenGraph {
-
-    [CmdletBinding()]
-    param(
-        [switch]$PermitirCodigoDispositivo
-    )
-
-    $clientId = "14d82eec-204b-4c2f-b7e8-296a70dab67e"
-    $scope = @(
-        "openid"
-        "profile"
-        "offline_access"
-        "https://graph.microsoft.com/User.Read.All"
-        "https://graph.microsoft.com/User.DeleteRestore.All"
-    ) -join " "
-
-    $tokenUri = (
-        "https://login.microsoftonline.com/" +
-        $script:GraphTenantId +
-        "/oauth2/v2.0/token"
-    )
-
-    $refreshToken = Leer-RefreshTokenGraph
-
-    if (-not [string]::IsNullOrWhiteSpace($refreshToken)) {
-        try {
-            $respuesta = Invoke-RestMethod `
-                -Method POST `
-                -Uri $tokenUri `
-                -ContentType "application/x-www-form-urlencoded" `
-                -Body @{
-                    client_id = $clientId
-                    grant_type = "refresh_token"
-                    refresh_token = $refreshToken
-                    scope = $scope
-                } `
-                -ErrorAction Stop
-
-            Establecer-TokenGraph -RespuestaToken $respuesta
-            return
-        }
-        catch {
-            if (-not $PermitirCodigoDispositivo) {
-                throw (
-                    "No fue posible renovar la sesion Graph. " +
-                    (Obtener-CuerpoErrorHttp -ErrorRecord $_)
-                )
-            }
-
-            $invalido = Join-Path `
-                $TokensGraphPath `
-                ("refresh-token-invalido_" +
-                    (Get-Date -Format "yyyyMMdd_HHmmss") +
-                    ".bin")
-
-            Move-Item `
-                -LiteralPath $TokenGraphFile `
-                -Destination $invalido `
-                -Force `
-                -ErrorAction SilentlyContinue
-        }
-    }
-
-    if (-not $PermitirCodigoDispositivo) {
-        throw "La sesion Graph expiro durante la ejecucion."
-    }
-
-    $deviceUri = (
-        "https://login.microsoftonline.com/" +
-        $script:GraphTenantId +
-        "/oauth2/v2.0/devicecode"
-    )
-
-    $dispositivo = Invoke-RestMethod `
-        -Method POST `
-        -Uri $deviceUri `
-        -ContentType "application/x-www-form-urlencoded" `
-        -Body @{
-            client_id = $clientId
-            scope = $scope
-        } `
-        -ErrorAction Stop
-
-    Write-Host ""
-    Write-Host "AUTENTICACION GRAPH REQUERIDA" -ForegroundColor Yellow
-    Write-Host $dispositivo.message -ForegroundColor Yellow
-
-    $intervalo = [Math]::Max(5, [int]$dispositivo.interval)
-    $limite = (Get-Date).AddSeconds([int]$dispositivo.expires_in)
-
-    while ((Get-Date) -lt $limite) {
-        Start-Sleep -Seconds $intervalo
-
-        try {
-            $respuesta = Invoke-RestMethod `
-                -Method POST `
-                -Uri $tokenUri `
-                -ContentType "application/x-www-form-urlencoded" `
-                -Body @{
-                    grant_type = (
-                        "urn:ietf:params:oauth:grant-type:device_code"
-                    )
-                    client_id = $clientId
-                    device_code = [string]$dispositivo.device_code
-                } `
-                -ErrorAction Stop
-
-            Establecer-TokenGraph -RespuestaToken $respuesta
-            return
-        }
-        catch {
-            $cuerpo = Obtener-CuerpoErrorHttp -ErrorRecord $_
-            $codigo = ""
-
-            try {
-                $codigo = [string](
-                    $cuerpo | ConvertFrom-Json -ErrorAction Stop
-                ).error
-            }
-            catch {
-            }
-
-            if ($codigo -eq "authorization_pending") {
-                continue
-            }
-
-            if ($codigo -eq "slow_down") {
-                $intervalo += 5
-                continue
-            }
-
-            throw "Error autenticando Graph: $cuerpo"
-        }
-    }
-
-    throw "El codigo de autenticacion Graph expiro."
-}
-
-
-function Invoke-GraphRequest {
-
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory=$true)]
-        [ValidateSet("GET","POST","PATCH","DELETE")]
-        [string]$Method,
-
-        [Parameter(Mandatory=$true)]
-        [string]$Uri,
-
-        [object]$Body = $null
-    )
-
-    if (
-        [string]::IsNullOrWhiteSpace($script:GraphAccessToken) -or
-        $script:GraphAccessTokenExpira -le (Get-Date).AddMinutes(2)
-    ) {
-        Obtener-TokenGraph
-    }
-
-    $parametros = @{
-        Method = $Method
-        Uri = $Uri
-        Headers = @{
-            Authorization = "Bearer $($script:GraphAccessToken)"
-        }
-        ErrorAction = "Stop"
-    }
-
-    if ($null -ne $Body) {
-        $parametros.ContentType = "application/json"
-        $parametros.Body = ($Body | ConvertTo-Json -Depth 10)
-    }
-
-    try {
-        return Invoke-RestMethod @parametros
-    }
-    catch {
-        $estado = $null
-        try {
-            $estado = [int]$_.Exception.Response.StatusCode
-        }
-        catch {
-        }
-
-        if ($estado -eq 401) {
-            Obtener-TokenGraph
-            $parametros.Headers.Authorization = (
-                "Bearer $($script:GraphAccessToken)"
-            )
-            return Invoke-RestMethod @parametros
-        }
-
-        throw
-    }
+    return $contexto
 }
 
 
@@ -683,14 +477,9 @@ function Obtener-UsuarioActivo {
 
     try {
 
-        $idUri = [Uri]::EscapeDataString($Identificador)
-
-        return Invoke-GraphRequest `
-            -Method GET `
-            -Uri (
-                "https://graph.microsoft.com/v1.0/users/${idUri}" +
-                "?`$select=id,displayName,userPrincipalName,userType"
-            ) `
+        return Get-MgUser `
+            -UserId $Identificador `
+            -Property Id,DisplayName,UserPrincipalName,UserType `
             -ErrorAction Stop
 
     }
@@ -712,29 +501,12 @@ function Buscar-UsuarioEliminadoPorNombre {
         [string]$Nombre
     )
 
-    $eliminados = New-Object 'System.Collections.Generic.List[object]'
-
-    $uri = (
-        "https://graph.microsoft.com/v1.0/directory/deletedItems/" +
-        "microsoft.graph.user" +
-        "?`$select=id,displayName,userPrincipalName,deletedDateTime" +
-        "&`$top=999"
-    )
-
-    while (-not [string]::IsNullOrWhiteSpace($uri)) {
-
-        $respuesta = Invoke-GraphRequest `
-            -Method GET `
-            -Uri $uri `
+    $eliminados = @(
+        Get-MgDirectoryDeletedItemAsUser `
+            -All `
+            -Property Id,DisplayName,UserPrincipalName,DeletedDateTime `
             -ErrorAction Stop
-
-        foreach ($usuarioEliminado in @($respuesta.value)) {
-            $eliminados.Add($usuarioEliminado)
-        }
-
-        $uri = [string]$respuesta.'@odata.nextLink'
-
-    }
+    )
 
     # Primero coincidencia exacta
 
@@ -1798,7 +1570,7 @@ function Procesar-Fila {
 
         # Confirmar nuevamente tenant
 
-        $contexto = $script:GraphContext
+        $contexto = Get-MgContext
 
         $tenantPermitido = (
             Get-Content -LiteralPath $TenantPath -Raw
@@ -1831,11 +1603,9 @@ function Procesar-Fila {
 
         # Eliminar el mismo objeto validado por Portal y Graph
 
-        $objectIdUri = [Uri]::EscapeDataString($objectIdOriginal)
-
-        Invoke-GraphRequest `
-            -Method DELETE `
-            -Uri "https://graph.microsoft.com/v1.0/users/$objectIdUri" `
+        Remove-MgUser `
+            -UserId $objectIdOriginal `
+            -Confirm:$false `
             -ErrorAction Stop
 
         Write-Host "Solicitud de eliminacion enviada."
@@ -1848,14 +1618,10 @@ function Procesar-Fila {
 
             try {
 
-                $eliminadoConfirmado = Invoke-GraphRequest `
-                    -Method GET `
-                    -Uri (
-                        "https://graph.microsoft.com/v1.0/" +
-                        "directory/deletedItems/$objectIdUri" +
-                        "?`$select=id,displayName," +
-                        "userPrincipalName,deletedDateTime"
-                    ) `
+                $eliminadoConfirmado = `
+                    Get-MgDirectoryDeletedItemAsUser `
+                    -DirectoryObjectId $objectIdOriginal `
+                    -Property Id,DisplayName,UserPrincipalName,DeletedDateTime `
                     -ErrorAction Stop
 
                 if (
@@ -2345,3 +2111,5 @@ Write-Host $runPath
 Write-Host ""
 Write-Host "Excel:"
 Write-Host $ExcelPath
+
+
