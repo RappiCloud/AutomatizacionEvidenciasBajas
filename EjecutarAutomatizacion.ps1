@@ -42,10 +42,6 @@ $LogsPath = Join-Path `
     $Base `
     "Logs"
 
-$PowerShellLimpio = Join-Path `
-    $env:SystemRoot `
-    "System32\WindowsPowerShell\v1.0\powershell.exe"
-
 
 # ==========================================================
 # VALIDACION
@@ -99,12 +95,6 @@ New-Item `
     -Force | Out-Null
 
 $env:AZURE_AUTOMATION_PROFILE = $PerfilTemporal
-
-$ResultadoProceso = Join-Path `
-    $PerfilTemporal `
-    "resultado_proceso.txt"
-
-$env:AZURE_AUTOMATION_RESULT = $ResultadoProceso
 
 
 # ==========================================================
@@ -170,35 +160,18 @@ try {
     Write-Host "INICIANDO PROCESAMIENTO"
     Write-Host "========================================"
 
-    # ProcesoUsuariosV4 siempre se ejecuta en un PowerShell 5.1 nuevo.
-    # Esto impide reutilizar ensamblados o credenciales de Graph que hayan
-    # quedado cargados por una ejecucion anterior en la consola del operador.
-    $argumentosProceso = @(
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        $Proceso
-    )
-
     if ($Todas) {
-        $argumentosProceso += "-Todas"
+
+        & $Proceso -Todas
+
     }
     else {
-        $argumentosProceso += @("-Fila", [string]$Fila)
+
+        & $Proceso -Fila $Fila
+
     }
 
-    & $PowerShellLimpio @argumentosProceso
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "ProcesoUsuariosV4 finalizo con codigo $LASTEXITCODE."
-    }
-
-    if (Test-Path -LiteralPath $ResultadoProceso) {
-        $MensajeAdvertencia = (
-            Get-Content -LiteralPath $ResultadoProceso -Raw
-        ).Trim()
-    }
+    $MensajeAdvertencia = [string]$env:AZURE_AUTOMATION_ROW_WARNINGS
 
     if (-not [string]::IsNullOrWhiteSpace($MensajeAdvertencia)) {
         $huboAdvertencias = $true
@@ -249,9 +222,6 @@ finally {
 
     Write-Host ""
     Remove-Item Env:\AZURE_AUTOMATION_PROFILE `
-        -ErrorAction SilentlyContinue
-
-    Remove-Item Env:\AZURE_AUTOMATION_RESULT `
         -ErrorAction SilentlyContinue
 
     Write-Host ""
