@@ -311,10 +311,12 @@ function Conectar-Graph {
         "2.39.0"
     }
 
+    # Todas las operaciones se realizan con Invoke-MgGraphRequest para que
+    # compartan el mismo token. Cargar los modulos Users y
+    # Identity.DirectoryManagement creaba proveedores de autenticacion
+    # adicionales que podian volver a mostrar el inicio de sesion por fila.
     $modulosGraph = @(
-        "Microsoft.Graph.Authentication",
-        "Microsoft.Graph.Users",
-        "Microsoft.Graph.Identity.DirectoryManagement"
+        "Microsoft.Graph.Authentication"
     )
 
     foreach ($moduloGraph in $modulosGraph) {
@@ -512,9 +514,14 @@ function Obtener-UsuarioActivo {
 
     try {
 
-        return Get-MgUser `
-            -UserId $Identificador `
-            -Property Id,DisplayName,UserPrincipalName,UserType `
+        $idUri = [Uri]::EscapeDataString($Identificador)
+
+        return Invoke-MgGraphRequest `
+            -Method GET `
+            -Uri (
+                "https://graph.microsoft.com/v1.0/users/${idUri}" +
+                "?`$select=id,displayName,userPrincipalName,userType"
+            ) `
             -ErrorAction Stop
 
     }
@@ -536,12 +543,29 @@ function Buscar-UsuarioEliminadoPorNombre {
         [string]$Nombre
     )
 
-    $eliminados = @(
-        Get-MgDirectoryDeletedItemAsUser `
-            -All `
-            -Property Id,DisplayName,UserPrincipalName,DeletedDateTime `
-            -ErrorAction Stop
+    $eliminados = New-Object 'System.Collections.Generic.List[object]'
+
+    $uri = (
+        "https://graph.microsoft.com/v1.0/directory/deletedItems/" +
+        "microsoft.graph.user" +
+        "?`$select=id,displayName,userPrincipalName,deletedDateTime" +
+        "&`$top=999"
     )
+
+    while (-not [string]::IsNullOrWhiteSpace($uri)) {
+
+        $respuesta = Invoke-MgGraphRequest `
+            -Method GET `
+            -Uri $uri `
+            -ErrorAction Stop
+
+        foreach ($usuarioEliminado in @($respuesta.value)) {
+            $eliminados.Add($usuarioEliminado)
+        }
+
+        $uri = [string]$respuesta.'@odata.nextLink'
+
+    }
 
     # Primero coincidencia exacta
 
@@ -1638,9 +1662,11 @@ function Procesar-Fila {
 
         # Eliminar el mismo objeto validado por Portal y Graph
 
-        Remove-MgUser `
-            -UserId $objectIdOriginal `
-            -Confirm:$false `
+        $objectIdUri = [Uri]::EscapeDataString($objectIdOriginal)
+
+        Invoke-MgGraphRequest `
+            -Method DELETE `
+            -Uri "https://graph.microsoft.com/v1.0/users/$objectIdUri" `
             -ErrorAction Stop
 
         Write-Host "Solicitud de eliminacion enviada."
@@ -1653,10 +1679,14 @@ function Procesar-Fila {
 
             try {
 
-                $eliminadoConfirmado = `
-                    Get-MgDirectoryDeletedItemAsUser `
-                    -DirectoryObjectId $objectIdOriginal `
-                    -Property Id,DisplayName,UserPrincipalName,DeletedDateTime `
+                $eliminadoConfirmado = Invoke-MgGraphRequest `
+                    -Method GET `
+                    -Uri (
+                        "https://graph.microsoft.com/v1.0/" +
+                        "directory/deletedItems/$objectIdUri" +
+                        "?`$select=id,displayName," +
+                        "userPrincipalName,deletedDateTime"
+                    ) `
                     -ErrorAction Stop
 
                 if (
