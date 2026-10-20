@@ -398,6 +398,10 @@ function Conectar-Graph {
             $reconectar = $true
         }
 
+        if ($contexto.ContextScope -ne "CurrentUser") {
+            $reconectar = $true
+        }
+
         foreach ($scope in $scopesNecesarios) {
 
             if ($contexto.Scopes -notcontains $scope) {
@@ -421,6 +425,8 @@ function Conectar-Graph {
         Connect-MgGraph `
             -TenantId $tenantPermitido `
             -Scopes $scopesNecesarios `
+            -UseDeviceCode `
+            -ContextScope CurrentUser `
             -NoWelcome `
             -ErrorAction Stop
 
@@ -458,6 +464,35 @@ $tenantPermitido
 Proceso detenido.
 "@
 
+    }
+
+    # Get-MgContext solamente confirma que existe un contexto. Esta llamada
+    # obtiene un token real antes de abrir Excel o empezar las filas, evitando
+    # solicitudes de autenticacion repetidas durante el procesamiento.
+    try {
+
+        $perfilGraph = Invoke-MgGraphRequest `
+            -Method GET `
+            -Uri "https://graph.microsoft.com/v1.0/me?`$select=id,userPrincipalName" `
+            -ErrorAction Stop
+
+    }
+    catch {
+
+        throw (
+            "No se pudo validar la sesion persistente de Microsoft Graph. " +
+            "Completa una sola vez el codigo de dispositivo y vuelve a " +
+            "ejecutar. Detalle: " +
+            (Obtener-DetalleError -ErrorRecord $_)
+        )
+
+    }
+
+    if (
+        $null -eq $perfilGraph -or
+        [string]::IsNullOrWhiteSpace([string]$perfilGraph.id)
+    ) {
+        throw "Microsoft Graph no devolvio la identidad autenticada."
     }
 
     Write-Host ""
