@@ -164,6 +164,7 @@ Start-Sleep -Seconds 2
 
 $portalAutenticado = $false
 $confirmacionesPortal = 0
+$errorAutenticacionPortal = $null
 
 for ($i = 1; $i -le 600; $i++) {
 
@@ -179,10 +180,26 @@ for ($i = 1; $i -le 600; $i++) {
             }
         )
 
+        $paginaErrorPortal = $paginas |
+            Where-Object {
+                $_.url -like "https://portal.azure.com/Error/*" -or
+                $_.title -like "*Sign-in failed*"
+            } |
+            Select-Object -First 1
+
+        if ($null -ne $paginaErrorPortal) {
+            $errorAutenticacionPortal = (
+                "El inicio de sesion en Azure Portal fallo. " +
+                "Completa nuevamente la autenticacion en Chrome."
+            )
+            break
+        }
+
         $paginaPortal = $paginas |
             Where-Object {
                 $_.url -like "https://portal.azure.com/*" -and
-                $_.url -notlike "https://portal.azure.com/auth/login*"
+                $_.url -notlike "https://portal.azure.com/auth/login*" -and
+                $_.url -notlike "https://portal.azure.com/Error/*"
             } |
             Select-Object -First 1
 
@@ -207,6 +224,10 @@ for ($i = 1; $i -le 600; $i++) {
 
     Start-Sleep -Milliseconds 500
 
+}
+
+if (-not [string]::IsNullOrWhiteSpace($errorAutenticacionPortal)) {
+    throw $errorAutenticacionPortal
 }
 
 if (-not $portalAutenticado) {

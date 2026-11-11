@@ -246,6 +246,11 @@ def validar_sesion(page):
 
         url = page.url.lower()
 
+        if "portal.azure.com/error/ue_signinfailed" in url:
+            raise RuntimeError(
+                "SESSION_EXPIRADA: El inicio de sesion en Azure fallo."
+            )
+
         if (
             "portal.azure.com" in url
             and "/auth/login" not in url
@@ -255,6 +260,7 @@ def validar_sesion(page):
 
         if (
             "login.microsoftonline.com" in url
+            or "login.microsoft.com" in url
             or "portal.azure.com/auth/login" in url
         ):
 
