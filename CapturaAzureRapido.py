@@ -513,11 +513,13 @@ def ir_all_users(page):
 
     portal_search.fill("Microsoft Entra ID")
 
-    opcion_entra = page.get_by_role(
-        "option",
-        name="Microsoft Entra ID",
-        exact=True
-    )
+    # Azure puede mostrar dos opciones con el mismo nombre: el servicio
+    # administrativo y Marketplace. La URL identifica de forma univoca
+    # el servicio Microsoft Entra ID que necesita la automatizacion.
+    opcion_entra = page.locator(
+        'a[role="option"]'
+        '[href*="Microsoft_AAD_IAM/ActiveDirectoryMenuBlade"]'
+    ).first
 
     opcion_entra.wait_for(
         state="visible",

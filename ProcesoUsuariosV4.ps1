@@ -1035,6 +1035,10 @@ function Invocar-CapturadorPersistente {
 
         $linea = Leer-LineaCapturador -TimeoutMs 120000
 
+        if ($null -eq $linea) {
+            throw "El capturador de Azure termino sin devolver un resultado."
+        }
+
         if ($linea.StartsWith("__CAPTURA_RESULT__")) {
 
             $jsonRespuesta = $linea.Substring(
@@ -1083,7 +1087,9 @@ function Cerrar-CapturadorPersistente {
     }
     finally {
 
-        $script:CapturadorProceso.Dispose()
+        if ($null -ne $script:CapturadorProceso) {
+            $script:CapturadorProceso.Dispose()
+        }
         $script:CapturadorProceso = $null
 
     }
@@ -1248,7 +1254,7 @@ function Capturar-Azure {
 
     $detalleCaptura = (
         $salidaCaptura |
-        ForEach-Object { "$_".Trim() } |
+        ForEach-Object { ([string]$_).Trim() } |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
         Select-Object -Last 1
     )
